@@ -240,9 +240,23 @@ export async function POST(request: Request): Promise<NextResponse> {
     const signature = request.headers.get('x-line-signature') || '';
     console.log('Request body:', body);
 
-    // 署名検証（簡易実装：本来はSDKのmiddlewareを使うか、cryptoで検証する）
-    // Next.js App Routerではmiddlewareの適用が難しいため、ここでは一旦スキップ
-    // 本番環境では署名検証を実装する必要がある
+    // 署名検証
+    const channelSecret = process.env.LINE_CHANNEL_SECRET;
+    if (!channelSecret) {
+      console.error('LINE_CHANNEL_SECRET is not set');
+      return NextResponse.json({ status: 'error', message: 'Server configuration error' }, { status: 500 });
+    }
+
+    const crypto = require('crypto');
+    const hash = crypto
+      .createHmac('sha256', channelSecret)
+      .update(body)
+      .digest('base64');
+
+    if (hash !== signature) {
+      console.error('Invalid signature');
+      return NextResponse.json({ status: 'error', message: 'Invalid signature' }, { status: 401 });
+    }
 
     const data = JSON.parse(body);
     const events: WebhookEvent[] = data.events;
