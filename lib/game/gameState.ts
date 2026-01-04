@@ -23,6 +23,25 @@ export const activeRooms = new Map<string, RoomData>();
 export const roleAssignments = new Map<string, Map<string, Role>>();
 
 /**
+ * グローバルデフォルト設定
+ * ゲーム開始前に設定された値を保存し、新しいゲームに適用
+ */
+export const globalSettings = {
+  nightPhaseDuration: 45000, // デフォルト45秒
+  thiefPhaseDuration: 22500, // デフォルト22.5秒
+};
+
+/**
+ * グローバル設定を更新
+ * @param nightDuration 夜フェーズの時間（ミリ秒）
+ */
+export function updateGlobalSettings(nightDuration: number): void {
+  globalSettings.nightPhaseDuration = nightDuration;
+  globalSettings.thiefPhaseDuration = Math.floor(nightDuration / 2);
+  console.log('Global settings updated:', globalSettings);
+}
+
+/**
  * ルームIDからルームデータとキーを取得
  * @param roomId ルームID
  * @returns ルームデータとキー、見つからない場合はnull

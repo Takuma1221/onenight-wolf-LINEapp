@@ -5,8 +5,173 @@
 
 import { prisma } from '@/lib/prisma';
 import { lineClient } from './lineClient';
-import { activeRooms, getRoomByLookupId } from './gameState';
+import { activeRooms, getRoomByLookupId, globalSettings, updateGlobalSettings } from './gameState';
 import { startVotingPhase } from './phaseHandlers';
+
+/**
+ * 設定変更処理（GMのみ）
+ * 夜フェーズの時間を変更する
+ */
+export async function handleSettings(event: any): Promise<void> {
+  const userId = event.source.userId;
+  const groupId = event.source.groupId || event.source.roomId;
+  const lookupId = groupId || userId;
+
+  console.log('Settings requested:', { userId, groupId, lookupId });
+
+  // ルームを検索
+  const result = getRoomByLookupId(lookupId);
+  
+  let currentDuration = globalSettings.nightPhaseDuration; // グローバル設定から取得
+  let roomId = 'default'; // ルームがない場合はデフォルト設定を変更
+  let isGM = true; // ルームがない場合は誰でも設定可能
+
+  if (result) {
+    const { room } = result;
+    // GMのみが設定できる
+    if (room.gmUserId !== userId) {
+      await lineClient.replyMessage({
+        replyToken: event.replyToken,
+        messages: [
+          {
+            type: 'text',
+            text: '設定を変更できるのは、GMのみです。',
+          },
+        ],
+      });
+      return;
+    }
+    currentDuration = room.nightPhaseDuration || globalSettings.nightPhaseDuration;
+    roomId = room.roomId;
+  }
+
+  const currentSec = Math.floor(currentDuration / 1000);
+
+  // 設定変更のクイックリプライボタンを送信
+  await lineClient.replyMessage({
+    replyToken: event.replyToken,
+    messages: [
+      {
+        type: 'text',
+        text: `現在の夜フェーズ時間: ${currentSec}秒\n\n変更したい時間を選択してください：`,
+        quickReply: {
+          items: [
+            {
+              type: 'action',
+              action: {
+                type: 'postback',
+                label: '30秒',
+                data: `action=change_night_time&roomId=${roomId}&duration=30000`,
+                displayText: '30秒に設定',
+              },
+            },
+            {
+              type: 'action',
+              action: {
+                type: 'postback',
+                label: '45秒（デフォルト）',
+                data: `action=change_night_time&roomId=${roomId}&duration=45000`,
+                displayText: '45秒に設定',
+              },
+            },
+            {
+              type: 'action',
+              action: {
+                type: 'postback',
+                label: '60秒',
+                data: `action=change_night_time&roomId=${roomId}&duration=60000`,
+                displayText: '60秒に設定',
+              },
+            },
+            {
+              type: 'action',
+              action: {
+                type: 'postback',
+                label: '90秒',
+                data: `action=change_night_time&roomId=${roomId}&duration=90000`,
+                displayText: '90秒に設定',
+              },
+            },
+          ],
+        },
+      },
+    ],
+  });
+}
+
+/**
+ * 夜フェーズ時間変更処理
+ */
+export async function handleChangeNightTime(event: any, roomId: string, duration: number): Promise<void> {
+  const userId = event.source.userId;
+
+  console.log('Night time change:', { userId, roomId, duration });
+
+  const durationSec = Math.floor(duration / 1000);
+
+  // roomIdが'default'の場合はグローバルデフォルト設定を変更（次回のゲームから適用）
+  if (roomId === 'default') {
+    // グローバル設定を更新
+    updateGlobalSettings(duration);
+    
+    await lineClient.replyMessage({
+      replyToken: event.replyToken,
+      messages: [
+        {
+          type: 'text',
+          text: `デフォルト設定を${durationSec}秒に変更しました。\n\n次回作成されるゲームから自動的にこの時間が適用されます。\n\n現在のグローバル設定: ${durationSec}秒`,
+        },
+      ],
+    });
+    return;
+  }
+
+  // ルームを検索
+  const result = getRoomByLookupId(roomId);
+  if (!result) {
+    await lineClient.replyMessage({
+      replyToken: event.replyToken,
+      messages: [
+        {
+          type: 'text',
+          text: 'ルームが見つかりません。',
+        },
+      ],
+    });
+    return;
+  }
+
+  const { room } = result;
+
+  // GMのみが変更できる
+  if (room.gmUserId !== userId) {
+    await lineClient.replyMessage({
+      replyToken: event.replyToken,
+      messages: [
+        {
+          type: 'text',
+          text: '設定を変更できるのは、GMのみです。',
+        },
+      ],
+    });
+    return;
+  }
+
+  // 時間を更新
+  room.nightPhaseDuration = duration;
+  room.thiefPhaseDuration = Math.floor(duration / 2);
+
+  await lineClient.replyMessage({
+    replyToken: event.replyToken,
+    messages: [
+      {
+        type: 'text',
+        text: `夜フェーズの時間を${durationSec}秒に設定しました。\n\n次回のゲームから反映されます。`,
+      },
+    ],
+  });
+}
+
 
 /**
  * 募集終了処理（ワンナイト人狼専用）

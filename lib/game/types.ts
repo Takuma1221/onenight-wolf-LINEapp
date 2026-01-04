@@ -36,4 +36,6 @@ export interface RoomData {
   discussionEndTime?: number;        // 議論終了予定時刻（Unix時間）
   originalThiefId?: string;          // 元の怪盗のID（交換前）
   originalFortuneTellerId?: string;  // 元の占い師のID（交換前）
+  nightPhaseDuration?: number;       // 夜フェーズの総時間（ミリ秒、デフォルト45000=45秒）
+  thiefPhaseDuration?: number;       // 怪盗フェーズの時間（ミリ秒、デフォルト22500=22.5秒）
 }

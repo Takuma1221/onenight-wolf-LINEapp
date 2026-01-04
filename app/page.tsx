@@ -26,7 +26,11 @@ export default function Home() {
               グループで「ゲーム開始」と送るとゲームが始まります。
             </p>
             <p className="text-sm text-zinc-700 dark:text-zinc-300">
-              <span className="font-bold text-zinc-900 dark:text-zinc-50">💡 便利なコマンド</span><br />
+              <span className="font-bold text-zinc-900 dark:text-zinc-50">� 設定コマンド</span><br />
+              GMが「設定」と送ると、夜フェーズの時間（30〜90秒）を変更できます。デフォルトは45秒です。
+            </p>
+            <p className="text-sm text-zinc-700 dark:text-zinc-300">
+              <span className="font-bold text-zinc-900 dark:text-zinc-50">💬 便利なコマンド</span><br />
               議論フェーズ中に「残り時間」「時間」「残り」のいずれかを送ると、残り時間を確認できます。
             </p>
           </div>

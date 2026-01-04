@@ -19,7 +19,9 @@ import {
   handleRecruitmentEnd,
   handleDiscussionEnd,
   handleExtendDiscussion,
-  handleShowRemainingTime
+  handleShowRemainingTime,
+  handleSettings,
+  handleChangeNightTime
 } from '@/lib/game/controlHandlers';
 import { handleAutoAssign } from '@/lib/game/assignmentHandlers';
 import { handleDivine, handleVote, handleThiefSwap } from '@/lib/game/actionHandlers';
@@ -82,6 +84,12 @@ async function handleEvent(event: WebhookEvent): Promise<void> {
     // 残り時間コマンド
     if (text === '残り時間' || text === '時間' || text === '残り') {
       await handleShowRemainingTime(event);
+      return;
+    }
+
+    // 設定コマンド
+    if (text === '設定') {
+      await handleSettings(event);
       return;
     }
 
@@ -187,6 +195,16 @@ async function handlePostback(event: any): Promise<void> {
     const target = data.get('target');
     if (target) {
       await handleThiefSwap(event, roomId, userId, target);
+    }
+    return;
+  }
+
+  // 夜フェーズ時間変更
+  if (action === 'change_night_time' && roomId) {
+    const durationStr = data.get('duration');
+    if (durationStr) {
+      const duration = parseInt(durationStr, 10);
+      await handleChangeNightTime(event, roomId, duration);
     }
     return;
   }

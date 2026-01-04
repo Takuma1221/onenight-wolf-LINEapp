@@ -4,7 +4,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { lineClient, isDummyPlayer, generateDummyName } from './lineClient';
-import { activeRooms, roleAssignments, removeRoom } from './gameState';
+import { activeRooms, roleAssignments, removeRoom, globalSettings } from './gameState';
 
 /**
  * 通常のゲーム開始処理
@@ -48,6 +48,8 @@ export async function handleGameStart(event: any): Promise<void> {
     gmUserId: userId,
     participants: new Set([userId]),
     status: 'recruiting',
+    nightPhaseDuration: globalSettings.nightPhaseDuration, // グローバル設定を適用
+    thiefPhaseDuration: globalSettings.thiefPhaseDuration, // グローバル設定を適用
   });
 
   // DBにルーム作成
@@ -136,6 +138,8 @@ export async function handleTestGameStart(event: any, text: string): Promise<voi
     gmUserId: userId,
     participants,
     status: 'recruiting',
+    nightPhaseDuration: globalSettings.nightPhaseDuration, // グローバル設定を適用
+    thiefPhaseDuration: globalSettings.thiefPhaseDuration, // グローバル設定を適用
   });
 
   // DBにルームを保存

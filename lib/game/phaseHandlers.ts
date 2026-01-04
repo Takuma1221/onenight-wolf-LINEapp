@@ -5,7 +5,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { lineClient, isDummyPlayer } from './lineClient';
-import { activeRooms, roleAssignments, getRoomByRoomId } from './gameState';
+import { activeRooms, roleAssignments, getRoomByRoomId, globalSettings } from './gameState';
 import { Role } from '@/lib/roleDistribution';
 // 循環依存を避けるため、handleVoteは動的インポート
 
@@ -23,17 +23,6 @@ export async function startNightPhase(
 ): Promise<void> {
   console.log('Starting night phase for room:', roomId, 'targetId:', targetId);
 
-  // グループに夜の通知
-  await lineClient.pushMessage({
-    to: targetId,
-    messages: [
-      {
-        type: 'text',
-        text: '...静かな夜が訪れました。\n\n能力を持つ者がいれば、行動を開始してください。\n\n夜は30秒間続きます。',
-      },
-    ],
-  });
-
   // 怪盗と占い師を探す（元の役職を記録）
   let thiefId: string | null = null;
   let fortuneTellerId: string | null = null;
@@ -49,24 +38,47 @@ export async function startNightPhase(
     }
   }
 
-  // 元の怪盗と占い師のIDをroomに保存
+  // 元の怪盗と占い師のIDをroomに保存、時間設定のデフォルト値も設定
   const roomResult = getRoomByRoomId(roomId);
   if (roomResult) {
     roomResult.room.originalThiefId = thiefId || undefined;
     roomResult.room.originalFortuneTellerId = fortuneTellerId || undefined;
+    // 時間設定がなければグローバル設定を適用
+    if (!roomResult.room.nightPhaseDuration) {
+      roomResult.room.nightPhaseDuration = globalSettings.nightPhaseDuration;
+    }
+    if (!roomResult.room.thiefPhaseDuration) {
+      roomResult.room.thiefPhaseDuration = globalSettings.thiefPhaseDuration;
+    }
   }
 
-  // 怪盗の処理を開始（最初の15秒）
+  const nightDuration = roomResult?.room.nightPhaseDuration || 45000;
+  const thiefDuration = roomResult?.room.thiefPhaseDuration || Math.floor(nightDuration / 2);
+  const nightDurationSec = Math.floor(nightDuration / 1000);
+
+  // グループに夜の通知（時間を動的に表示）
+  await lineClient.pushMessage({
+    to: targetId,
+    messages: [
+      {
+        type: 'text',
+        text: `...静かな夜が訪れました。\n\n能力を持つ者がいれば、行動を開始してください。\n\n夜は${nightDurationSec}秒間続きます。`,
+      },
+    ],
+  });
+
+  // 怪盗の処理を開始（夜フェーズの前半）
   if (thiefId) {
-    await handleThiefPhase(roomId, targetId, thiefId, roles, otherPlayers);
+    await handleThiefPhase(roomId, targetId, thiefId, roles, otherPlayers, thiefDuration);
   }
 
-  // 15秒後に占い師の処理を開始（元の占い師を使用）
+  // 怪盗フェーズ後に占い師の処理を開始（元の占い師を使用）
   setTimeout(async () => {
     if (fortuneTellerId) {
-      await handleFortuneTellerPhase(roomId, targetId, fortuneTellerId, roles, otherPlayers);
+      const fortuneTellerDuration = nightDuration - thiefDuration;
+      await handleFortuneTellerPhase(roomId, targetId, fortuneTellerId, roles, otherPlayers, fortuneTellerDuration);
     }
-  }, 15000);
+  }, thiefDuration);
 
   // 怪盗も占い師もいない場合、全員に待機メッセージ
   if (!thiefId && !fortuneTellerId) {
@@ -100,12 +112,12 @@ export async function startNightPhase(
     }
   }
 
-  // 30秒後に朝フェーズへ移行
-  console.log('Setting night timer for 30 seconds...');
+  // 設定された時間後に朝フェーズへ移行
+  console.log(`Setting night timer for ${nightDurationSec} seconds...`);
   const nightTimer = setTimeout(() => {
     console.log('Night timer expired - moving to day phase');
     startDayPhase(roomId, targetId);
-  }, 30000);
+  }, nightDuration);
 
   // タイマーをroomに保存
   if (roomResult) {
@@ -114,15 +126,17 @@ export async function startNightPhase(
 }
 
 /**
- * 怪盗フェーズの処理（最初の15秒）
+ * 怪盗フェーズの処理
  */
 async function handleThiefPhase(
   roomId: string,
   targetId: string,
   thiefId: string,
   roles: Map<string, Role>,
-  otherPlayers: string[]
+  otherPlayers: string[],
+  duration: number = 22500
 ): Promise<void> {
+  const durationSec = Math.floor(duration / 1000);
   console.log('Starting thief phase:', thiefId);
 
   // ダミー怪盗は自動で交換
@@ -164,7 +178,7 @@ async function handleThiefPhase(
     messages: [
       {
         type: 'text',
-        text: 'あなたは 【怪盗】 です。\n\n今宵、役職を交換する相手を1人選んでください。\n\n交換後の役職が通知されます。\n\n（15秒以内に選択してください）',
+        text: `あなたは 【怪盗】 です。\n\n今宵、役職を交換する相手を1人選んでください。\n\n交換後の役職が通知されます。\n\n（${durationSec}秒以内に選択してください）`,
         quickReply: {
           items: actions.map((action) => ({
             type: 'action' as const,
@@ -177,7 +191,7 @@ async function handleThiefPhase(
 }
 
 /**
- * 占い師フェーズの処理（後半の15秒）
+ * 占い師フェーズの処理
  * 元の占い師（交換されていても）が占いを実行
  */
 async function handleFortuneTellerPhase(
@@ -185,8 +199,10 @@ async function handleFortuneTellerPhase(
   targetId: string,
   originalFortuneTellerId: string,
   roles: Map<string, Role>,
-  otherPlayers: string[]
+  otherPlayers: string[],
+  duration: number = 22500
 ): Promise<void> {
+  const durationSec = Math.floor(duration / 1000);
   console.log('Starting fortune teller phase. Original fortune teller:', originalFortuneTellerId);
 
   // 現在の役職を確認（怪盗と交換されていれば変わっている）
@@ -232,8 +248,8 @@ async function handleFortuneTellerPhase(
 
   // 怪盗と交換されていても、元の占い師に占いメッセージを送る
   const messageText = currentRole === '占い師' 
-    ? 'あなたは 【占い師】 です。\n\n今宵、占いたい相手を1人選んでください。\n\n（15秒以内に選択してください）'
-    : `あなたは現在 【${currentRole}】 ですが、元々占い師だったため占いを行えます。\n\n今宵、占いたい相手を1人選んでください。\n\n（15秒以内に選択してください）`;
+    ? `あなたは 【占い師】 です。\n\n今宵、占いたい相手を1人選んでください。\n\n（${durationSec}秒以内に選択してください）`
+    : `あなたは現在 【${currentRole}】 ですが、元々占い師だったため占いを行えます。\n\n今宵、占いたい相手を1人選んでください。\n\n（${durationSec}秒以内に選択してください）`;
 
   await lineClient.pushMessage({
     to: originalFortuneTellerId,
