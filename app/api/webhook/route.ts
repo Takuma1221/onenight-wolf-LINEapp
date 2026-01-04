@@ -253,19 +253,29 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json({ status: 'error', message: 'Internal server error' }, { status: 500 });
     }
 
+    // デバッグ用ログ（原因特定後に削除）
+    console.log('SECRET exists:', !!channelSecret);
+    console.log('SECRET length:', channelSecret.length);
+    console.log('Signature received:', signature);
+
     // HMAC-SHA256で署名を計算
     const expectedSignature = crypto
       .createHmac('sha256', channelSecret)
       .update(body)
       .digest('base64');
 
+    console.log('Expected signature:', expectedSignature);
+
     // タイミング攻撃を防ぐためtimingSafeEqualを使用
     const signatureBuffer = Buffer.from(signature, 'base64');
     const expectedBuffer = Buffer.from(expectedSignature, 'base64');
     
+    console.log('Signature buffer length:', signatureBuffer.length);
+    console.log('Expected buffer length:', expectedBuffer.length);
+    
     if (signatureBuffer.length !== expectedBuffer.length || 
         !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) {
-      console.error('Invalid signature');
+      console.error('Invalid signature - mismatch');
       return NextResponse.json({ status: 'error', message: 'Unauthorized' }, { status: 401 });
     }
 
