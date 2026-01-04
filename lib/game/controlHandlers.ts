@@ -127,34 +127,36 @@ export async function handleRecruitmentEnd(event: any): Promise<void> {
  * 議論を強制終了し、投票フェーズへ移行
  */
 export async function handleDiscussionEnd(event: any): Promise<void> {
-  const userId = event.source.userId;
-  const groupId = event.source.groupId || event.source.roomId;
-  const lookupId = groupId || userId;
+  try {
+    const userId = event.source.userId;
+    const groupId = event.source.groupId || event.source.roomId;
+    const lookupId = groupId || userId;
 
-  console.log('Discussion end requested:', { userId, groupId, lookupId });
+    console.log('Discussion end requested:', { userId, groupId, lookupId });
 
-  // ルームを検索
-  const result = getRoomByLookupId(lookupId);
-  if (!result) {
-    await lineClient.replyMessage({
-      replyToken: event.replyToken,
-      messages: [
-        {
-          type: 'text',
-          text: 'ルームが見つかりません。',
-        },
-      ],
+    // ルームを検索
+    const result = getRoomByLookupId(lookupId);
+    if (!result) {
+      console.log('Room not found for discussion end');
+      await lineClient.replyMessage({
+        replyToken: event.replyToken,
+        messages: [
+          {
+            type: 'text',
+            text: 'ルームが見つかりません。',
+          },
+        ],
+      });
+      return;
+    }
+
+    const { room, key: roomKey } = result;
+
+    console.log('Discussion end - Room search result:', {
+      roomFound: true,
+      roomStatus: room.status,
+      isGM: room.gmUserId === userId
     });
-    return;
-  }
-
-  const { room, key: roomKey } = result;
-
-  console.log('Discussion end - Room search result:', {
-    roomFound: true,
-    roomStatus: room.status,
-    isGM: room.gmUserId === userId
-  });
 
   if (room.status !== 'day') {
     console.log('Not in day phase or room not found - current status:', room.status);
@@ -193,6 +195,8 @@ export async function handleDiscussionEnd(event: any): Promise<void> {
 
   const targetId = groupId || userId;
   
+  console.log('Sending discussion end message to:', targetId);
+  
   await lineClient.pushMessage({
     to: targetId,
     messages: [
@@ -203,8 +207,13 @@ export async function handleDiscussionEnd(event: any): Promise<void> {
     ],
   });
 
+  console.log('Starting voting phase for room:', room.roomId);
+  
   // 即座に投票フェーズへ
   startVotingPhase(room.roomId, targetId);
+  } catch (error) {
+    console.error('Error in handleDiscussionEnd:', error);
+  }
 }
 
 /**
@@ -311,4 +320,98 @@ export async function handleExtendDiscussion(event: any): Promise<void> {
     startVotingPhase(room.roomId, targetId);
   }, timeUntilEnd);
   room.discussionTimers.push(votingTimer);
+}
+
+/**
+ * 残り時間表示処理
+ * 議論フェーズの残り時間を表示
+ */
+export async function handleShowRemainingTime(event: any): Promise<void> {
+  const userId = event.source.userId;
+  const groupId = event.source.groupId || event.source.roomId;
+  const lookupId = groupId || userId;
+
+  console.log('Remaining time requested:', { userId, groupId, lookupId });
+
+  // ルームを検索
+  const result = getRoomByLookupId(lookupId);
+  if (!result) {
+    await lineClient.replyMessage({
+      replyToken: event.replyToken,
+      messages: [
+        {
+          type: 'text',
+          text: 'ルームが見つかりません。',
+        },
+      ],
+    });
+    return;
+  }
+
+  const { room } = result;
+
+  if (room.status !== 'day') {
+    await lineClient.replyMessage({
+      replyToken: event.replyToken,
+      messages: [
+        {
+          type: 'text',
+          text: '現在は議論フェーズではありません。',
+        },
+      ],
+    });
+    return;
+  }
+
+  // 残り時間を計算
+  const currentTime = Date.now();
+  if (!room.discussionEndTime) {
+    await lineClient.replyMessage({
+      replyToken: event.replyToken,
+      messages: [
+        {
+          type: 'text',
+          text: '議論時間の情報が見つかりません。',
+        },
+      ],
+    });
+    return;
+  }
+
+  const remainingMs = room.discussionEndTime - currentTime;
+  
+  if (remainingMs <= 0) {
+    await lineClient.replyMessage({
+      replyToken: event.replyToken,
+      messages: [
+        {
+          type: 'text',
+          text: '議論時間は終了しました。まもなく投票フェーズに移行します。',
+        },
+      ],
+    });
+    return;
+  }
+
+  const remainingMinutes = Math.floor(remainingMs / 60000);
+  const remainingSeconds = Math.floor((remainingMs % 60000) / 1000);
+
+  let timeText = '';
+  if (remainingMinutes > 0) {
+    timeText = `${remainingMinutes}分${remainingSeconds}秒`;
+  } else {
+    timeText = `${remainingSeconds}秒`;
+  }
+
+  await lineClient.replyMessage({
+    replyToken: event.replyToken,
+    messages: [
+      {
+        type: 'text',
+        text: `⏰ 残り時間: ${timeText}`,
+      },
+    ],
+  });
+
+  console.log('Remaining time shown:', timeText);
 }

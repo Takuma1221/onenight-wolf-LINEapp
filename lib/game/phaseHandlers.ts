@@ -11,7 +11,7 @@ import { Role } from '@/lib/roleDistribution';
 
 /**
  * 夜フェーズを開始
- * 占い師の行動フェーズ（1分間）
+ * 怪盗→占い師の順で行動を処理（各15秒、合計30秒）
  * @param roomId ルームID
  * @param targetId メッセージ送信先ID
  * @param roles 役職マップ
@@ -29,123 +29,47 @@ export async function startNightPhase(
     messages: [
       {
         type: 'text',
-        text: '...静かな夜が訪れました。\n\n能力を持つ者（占い師）は、行動を開始してください。\n\n（個別にメッセージをお送りします）\n\n夜は1分間続きます。',
+        text: '...静かな夜が訪れました。\n\n能力を持つ者がいれば、行動を開始してください。\n\n夜は30秒間続きます。',
       },
     ],
   });
 
-  // 1分後に朝フェーズへ移行（占い師が行動しなかった場合）
-  // このタイマーは占い師が行動したらキャンセルされる
-  console.log('Setting night timer for 60 seconds...');
-  const nightTimer = setTimeout(() => {
-    console.log('Night timer expired - moving to day phase');
-    startDayPhase(roomId, targetId);
-  }, 60000); // 60秒 = 1分
-
-  // タイマーをroomに保存
-  const result = getRoomByRoomId(roomId);
-  if (result) {
-    result.room.nightTimer = nightTimer;
-  }
-
-  // 占い師を探す
+  // 怪盗と占い師を探す（元の役職を記録）
+  let thiefId: string | null = null;
   let fortuneTellerId: string | null = null;
   const otherPlayers: string[] = [];
 
   for (const [uid, role] of roles.entries()) {
-    if (role === '占い師') {
+    if (role === '怪盗') {
+      thiefId = uid;
+    } else if (role === '占い師') {
       fortuneTellerId = uid;
     } else {
       otherPlayers.push(uid);
     }
   }
 
-  // 占い師に占い対象選択ボタンを送信
-  if (fortuneTellerId) {
-    // ダミーの占い師は自動で占いを実行
-    if (isDummyPlayer(fortuneTellerId)) {
-      const targetUid = otherPlayers[Math.floor(Math.random() * otherPlayers.length)];
-      console.log('Dummy fortune teller auto-divine:', fortuneTellerId, '->', targetUid);
-      
-      const { handleDivine } = await import('./actionHandlers');
-      setTimeout(() => {
-        handleDivine({ source: { userId: fortuneTellerId } }, roomId, fortuneTellerId, targetUid);
-      }, Math.random() * 3000 + 2000); // 2-5秒後にランダム占い
-      
-      // 他のプレイヤーに待機メッセージ
-      for (const [uid, role] of roles.entries()) {
-        if (!isDummyPlayer(uid)) {
-          await lineClient.pushMessage({
-            to: uid,
-            messages: [
-              {
-                type: 'text',
-                text: `あなたは 【${role}】 です。\n\nどうか無事に、朝が訪れることを祈ってください……。`,
-              },
-            ],
-          });
-        }
-      }
-      
-      return;
+  // 元の怪盗と占い師のIDをroomに保存
+  const roomResult = getRoomByRoomId(roomId);
+  if (roomResult) {
+    roomResult.room.originalThiefId = thiefId || undefined;
+    roomResult.room.originalFortuneTellerId = fortuneTellerId || undefined;
+  }
+
+  // 怪盗の処理を開始（最初の15秒）
+  if (thiefId) {
+    await handleThiefPhase(roomId, targetId, thiefId, roles, otherPlayers);
+  }
+
+  // 15秒後に占い師の処理を開始（元の占い師を使用）
+  setTimeout(async () => {
+    if (fortuneTellerId) {
+      await handleFortuneTellerPhase(roomId, targetId, fortuneTellerId, roles, otherPlayers);
     }
+  }, 15000);
 
-    // プレイヤーの表示名をDBから取得
-    const players = await prisma.player.findMany({
-      where: {
-        roomId: roomId,
-        lineUserId: { in: otherPlayers },
-      },
-      select: {
-        lineUserId: true,
-        displayName: true,
-      },
-    });
-
-    const playerMap = new Map(players.map(p => [p.lineUserId, p.displayName]));
-
-    const actions = otherPlayers.map((uid) => ({
-      type: 'postback' as const,
-      label: (playerMap.get(uid) || uid.substring(0, 10)) + ' を占う',
-      data: `action=divine&roomId=${roomId}&target=${uid}`,
-      displayText: '占いました',
-    }));
-
-    await lineClient.pushMessage({
-      to: fortuneTellerId,
-      messages: [
-        {
-          type: 'text',
-          text: 'あなたは 【占い師】 です。\n\n今宵、占いたい相手を1人選んでください。',
-          quickReply: {
-            items: actions.map((action) => ({
-              type: 'action' as const,
-              action,
-            })),
-          },
-        },
-      ],
-    });
-
-    // 人狼と市民に待機メッセージ
-    for (const [uid, role] of roles.entries()) {
-      if (role !== '占い師' && !isDummyPlayer(uid)) {
-        await lineClient.pushMessage({
-          to: uid,
-          messages: [
-            {
-              type: 'text',
-              text: `あなたは 【${role}】 です。\n\nどうか無事に、朝が訪れることを祈ってください……。`,
-            },
-          ],
-        });
-      }
-    }
-  } else {
-    // 占い師がいない場合（場札にいる）
-    console.log('No fortune teller in this game - skipping night phase');
-    
-    // 全員に待機メッセージ（ダミーを除く）
+  // 怪盗も占い師もいない場合、全員に待機メッセージ
+  if (!thiefId && !fortuneTellerId) {
     for (const [uid, role] of roles.entries()) {
       if (!isDummyPlayer(uid)) {
         await lineClient.pushMessage({
@@ -153,16 +77,179 @@ export async function startNightPhase(
           messages: [
             {
               type: 'text',
-              text: `あなたは 【${role}】 です。\n\nどうか無事に、朝が訪れることを祈ってください……。`,
+              text: `あなたは 【${role}】 です。\n\n静かに朝が訪れるのを待ってください……。`,
             },
           ],
         });
       }
     }
-
-    // 占い師がいないので、自動的に朝フェーズへ移行
-    // （1分後のタイマーが既にセットされているので、ここでは何もしない）
+  } else {
+    // 怪盗でも占い師でもないプレイヤーに待機メッセージ
+    for (const [uid, role] of roles.entries()) {
+      if (role !== '怪盗' && role !== '占い師' && !isDummyPlayer(uid)) {
+        await lineClient.pushMessage({
+          to: uid,
+          messages: [
+            {
+              type: 'text',
+              text: `あなたは 【${role}】 です。\n\n静かに朝が訪れるのを待ってください……。`,
+            },
+          ],
+        });
+      }
+    }
   }
+
+  // 30秒後に朝フェーズへ移行
+  console.log('Setting night timer for 30 seconds...');
+  const nightTimer = setTimeout(() => {
+    console.log('Night timer expired - moving to day phase');
+    startDayPhase(roomId, targetId);
+  }, 30000);
+
+  // タイマーをroomに保存
+  if (roomResult) {
+    roomResult.room.nightTimer = nightTimer;
+  }
+}
+
+/**
+ * 怪盗フェーズの処理（最初の15秒）
+ */
+async function handleThiefPhase(
+  roomId: string,
+  targetId: string,
+  thiefId: string,
+  roles: Map<string, Role>,
+  otherPlayers: string[]
+): Promise<void> {
+  console.log('Starting thief phase:', thiefId);
+
+  // ダミー怪盗は自動で交換
+  if (isDummyPlayer(thiefId)) {
+    const target = otherPlayers[Math.floor(Math.random() * otherPlayers.length)];
+    console.log('Dummy thief auto-swap:', thiefId, '->', target);
+    
+    const { handleThiefSwap } = await import('./actionHandlers');
+    setTimeout(() => {
+      handleThiefSwap({ source: { userId: thiefId } }, roomId, thiefId, target);
+    }, Math.random() * 3000 + 2000);
+    
+    return;
+  }
+
+  // プレイヤーの表示名をDBから取得
+  const players = await prisma.player.findMany({
+    where: {
+      roomId: roomId,
+      lineUserId: { in: otherPlayers },
+    },
+    select: {
+      lineUserId: true,
+      displayName: true,
+    },
+  });
+
+  const playerMap = new Map(players.map(p => [p.lineUserId, p.displayName]));
+
+  const actions = otherPlayers.map((uid) => ({
+    type: 'postback' as const,
+    label: (playerMap.get(uid) || uid.substring(0, 10)) + ' と交換',
+    data: `action=thief_swap&roomId=${roomId}&target=${uid}`,
+    displayText: '交換しました',
+  }));
+
+  await lineClient.pushMessage({
+    to: thiefId,
+    messages: [
+      {
+        type: 'text',
+        text: 'あなたは 【怪盗】 です。\n\n今宵、役職を交換する相手を1人選んでください。\n\n交換後の役職が通知されます。\n\n（15秒以内に選択してください）',
+        quickReply: {
+          items: actions.map((action) => ({
+            type: 'action' as const,
+            action,
+          })),
+        },
+      },
+    ],
+  });
+}
+
+/**
+ * 占い師フェーズの処理（後半の15秒）
+ * 元の占い師（交換されていても）が占いを実行
+ */
+async function handleFortuneTellerPhase(
+  roomId: string,
+  targetId: string,
+  originalFortuneTellerId: string,
+  roles: Map<string, Role>,
+  otherPlayers: string[]
+): Promise<void> {
+  console.log('Starting fortune teller phase. Original fortune teller:', originalFortuneTellerId);
+
+  // 現在の役職を確認（怪盗と交換されていれば変わっている）
+  const currentRole = roles.get(originalFortuneTellerId);
+  console.log('Original fortune teller current role:', currentRole);
+
+  // ダミー占い師は自動で占い
+  if (isDummyPlayer(originalFortuneTellerId)) {
+    const target = otherPlayers[Math.floor(Math.random() * otherPlayers.length)];
+    console.log('Dummy fortune teller auto-divine:', originalFortuneTellerId, '->', target);
+    
+    const { handleDivine } = await import('./actionHandlers');
+    setTimeout(() => {
+      handleDivine({ source: { userId: originalFortuneTellerId } }, roomId, originalFortuneTellerId, target);
+    }, Math.random() * 3000 + 2000);
+    
+    return;
+  }
+
+  // プレイヤーの表示名をDBから取得
+  const players = await prisma.player.findMany({
+    where: {
+      roomId: roomId,
+      lineUserId: { in: otherPlayers },
+    },
+    select: {
+      lineUserId: true,
+      displayName: true,
+    },
+  });
+
+  const playerMap = new Map(players.map(p => [p.lineUserId, p.displayName]));
+
+  // 元の占い師が占える対象（自分以外）
+  const divineTargets = otherPlayers.filter(uid => uid !== originalFortuneTellerId);
+
+  const actions = divineTargets.map((uid) => ({
+    type: 'postback' as const,
+    label: (playerMap.get(uid) || uid.substring(0, 10)) + ' を占う',
+    data: `action=divine&roomId=${roomId}&target=${uid}`,
+    displayText: '占いました',
+  }));
+
+  // 怪盗と交換されていても、元の占い師に占いメッセージを送る
+  const messageText = currentRole === '占い師' 
+    ? 'あなたは 【占い師】 です。\n\n今宵、占いたい相手を1人選んでください。\n\n（15秒以内に選択してください）'
+    : `あなたは現在 【${currentRole}】 ですが、元々占い師だったため占いを行えます。\n\n今宵、占いたい相手を1人選んでください。\n\n（15秒以内に選択してください）`;
+
+  await lineClient.pushMessage({
+    to: originalFortuneTellerId,
+    messages: [
+      {
+        type: 'text',
+        text: messageText,
+        quickReply: {
+          items: actions.map((action) => ({
+            type: 'action' as const,
+            action,
+          })),
+        },
+      },
+    ],
+  });
 }
 
 /**
@@ -208,7 +295,7 @@ export async function startDayPhase(roomId: string, targetId: string): Promise<v
       messages: [
         {
           type: 'text',
-          text: '...東の空が白み始めました。朝が訪れます。\n\n昨晩、犠牲者はいませんでした。\n\n（※ワンナイトモードでは、人狼の襲撃は発生しません）\n\nこれより、最後の議論を開始します。\n\n議論時間は [ 3分 ] です。\n\n占い師の情報を元に、皆さんの中に潜む「人狼」を必ず見つけ出してください。\n\n※GMは「延長」で1分延長、「議論終了」で即座に投票へ移行できます。',
+          text: '...東の空が白み始めました。朝が訪れます。\n\n昨晩、犠牲者はいませんでした。\n\n（※ワンナイトモードでは、人狼の襲撃は発生しません）\n\nこれより、最後の議論を開始します。\n\n議論時間は [ 3分 ] です。\n\n占い師の情報を元に、皆さんの中に潜む「人狼」を必ず見つけ出してください。\n\n※GMは「延長」で1分延長、「議論終了」で即座に投票へ移行できます。\n\n💡「残り時間」「時間」「残り」のいずれかを送ると、残り時間を確認できます。',
         },
       ],
     });

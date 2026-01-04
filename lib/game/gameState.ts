@@ -38,15 +38,25 @@ export function getRoomByRoomId(roomId: string): { room: RoomData; key: string }
 
 /**
  * lookupId（グループIDまたはユーザーID）からルームを取得
+ * groupIdフィールドもチェックして、より柔軟に検索
  * @param lookupId LINEグループID or ユーザーID
  * @returns ルームデータとキー、見つからない場合はnull
  */
 export function getRoomByLookupId(lookupId: string): { room: RoomData; key: string } | null {
+  // まず直接キーで検索
+  const directMatch = activeRooms.get(lookupId);
+  if (directMatch) {
+    return { room: directMatch, key: lookupId };
+  }
+  
+  // キーが見つからない場合、全ルームを走査
   for (const [key, value] of activeRooms.entries()) {
-    if (key === lookupId || value.roomId === lookupId) {
+    // groupIdが一致するか、roomIdが一致するか、gmUserIdが一致する場合
+    if (value.groupId === lookupId || value.roomId === lookupId || value.gmUserId === lookupId) {
       return { room: value, key };
     }
   }
+  
   return null;
 }
 

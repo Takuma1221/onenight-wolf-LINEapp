@@ -188,7 +188,7 @@ async function showPeaceVillageResult(roomId: string, targetId: string): Promise
     // 平和村判定が正解（プレイヤーに人狼なし、場札に人狼あり）
     winnerTeam = '市民チーム';
     winnerEmoji = '🎉';
-    resultMessage = `判定は正解でした！\n\n実は今回、人狼は場札に紛れていました。\n参加者の中に人狼はいなかったのです！\n\n（これを「平和村」と呼びます）\n\nよって……\n\n${winnerEmoji}【 ${winnerTeam} 】の勝利です！ ${winnerEmoji}\n\n`;
+    resultMessage = `判定は正解でした！\n\n実は今回、参加者の中に人狼はいませんでした！\n\n（これを「平和村」と呼びます）\n\nよって……\n\n${winnerEmoji}【 ${winnerTeam} 】の勝利です！ ${winnerEmoji}\n\n`;
   } else {
     // 平和村判定が間違い（実際にはプレイヤーに人狼がいた）
     winnerTeam = '人狼チーム';
@@ -292,9 +292,10 @@ async function showFinalResults(
 
   if (!werewolfExists && fieldHasWerewolf) {
     // 平和村（人狼が場札にいた）
+    // 市民か占い師を追放した場合は市民チームの敗北
     winnerTeam = '市民チーム';
-    winnerEmoji = '🎉';
-    resultMessage = `追放されたのは ${playerMap.get(expelledId) || expelledId} でした。\n\nそして、その役職は…… 【 ${expelledRole} 】 でした！\n\n実は今回、人狼は場札に紛れていました。\n参加者の中に人狼はいなかったのです！\n\n（これを「平和村」と呼びます）\n\nよって……\n\n${winnerEmoji}【 ${winnerTeam} 】の勝利です！ ${winnerEmoji}\n\n`;
+    winnerEmoji = '😢';
+    resultMessage = `追放されたのは ${playerMap.get(expelledId) || expelledId} でした。\n\nそして、その役職は…… 【 ${expelledRole} 】 でした！\n\n実は今回、参加者の中に人狼はいませんでした！\n\n（これを「平和村」と呼びます）\n\n平和村で仲間を追放してしまいました……\n\n${winnerEmoji}【 ${winnerTeam} の敗北 】です ${winnerEmoji}\n\n`;
   } else {
     // 通常の勝敗判定
     const isWerewolfExpelled = expelledRole === '人狼';

@@ -11,6 +11,93 @@ import { startDayPhase } from './phaseHandlers';
 import { showVoteResults } from './resultHandlers';
 
 /**
+ * 怪盗の交換処理
+ * 怪盗が対象と役職を交換し、結果を通知する
+ * @param event イベント
+ * @param roomId ルームID
+ * @param thiefId 怪盗のユーザーID
+ * @param targetId 交換対象のユーザーID
+ */
+export async function handleThiefSwap(
+  event: any,
+  roomId: string,
+  thiefId: string,
+  targetId: string
+): Promise<void> {
+  console.log('Thief swap action:', { roomId, thiefId, targetId });
+
+  // roomIdでルームと役職情報を取得
+  const result = getRoomByRoomId(roomId);
+  if (!result) {
+    console.log('Room not found for thief swap');
+    return;
+  }
+
+  const { room } = result;
+
+  const roles = roleAssignments.get(roomId);
+  if (!roles) {
+    console.log('Roles not found for room');
+    return;
+  }
+
+  // 役職を交換
+  const thiefOriginalRole = roles.get(thiefId);
+  const targetOriginalRole = roles.get(targetId);
+
+  if (!thiefOriginalRole || !targetOriginalRole) {
+    console.log('Role not found for swap');
+    return;
+  }
+
+  // 交換実行
+  roles.set(thiefId, targetOriginalRole);
+  roles.set(targetId, thiefOriginalRole);
+
+  console.log('Roles swapped:', {
+    thief: `${thiefId} (怪盗 → ${targetOriginalRole})`,
+    target: `${targetId} (${targetOriginalRole} → 怪盗)`,
+  });
+
+  // 対象の表示名を取得
+  const targetPlayer = await prisma.player.findFirst({
+    where: {
+      roomId: roomId,
+      lineUserId: targetId,
+    },
+    select: {
+      displayName: true,
+    },
+  });
+
+  const targetName = targetPlayer?.displayName || targetId.substring(0, 10);
+
+  // 怪盗に交換結果を通知（ダミーを除く）
+  if (!isDummyPlayer(thiefId)) {
+    const message = `交換が完了しました。\n\n${targetName} さんと役職を交換しました。\n\nあなたの新しい役職は……\n\n【 ${targetOriginalRole} 】\n\nです！\n\n${targetOriginalRole === '人狼' 
+      ? '人狼チームとして生き残りましょう！' 
+      : '市民チームとして人狼を見つけ出しましょう！'}\n\nまもなく朝フェーズが始まります。`;
+
+    if (event.replyToken) {
+      await lineClient.replyMessage({
+        replyToken: event.replyToken,
+        messages: [{ type: 'text', text: message }],
+      });
+    } else {
+      await lineClient.pushMessage({
+        to: thiefId,
+        messages: [{ type: 'text', text: message }],
+      });
+    }
+  } else {
+    console.log('Dummy thief swap - skipping message');
+  }
+
+  console.log('Thief acted - waiting for night phase timer (30s fixed)');
+}
+
+
+/**
  * 占い処理
  * 占い師が対象を占い、結果を通知する
  * @param event イベント
@@ -58,13 +145,6 @@ export async function handleDivine(
 
   const targetName = targetPlayer?.displayName || targetId.substring(0, 10);
 
-  // 夜フェーズのタイマーをキャンセル（占い師が行動したので）
-  if (room.nightTimer) {
-    clearTimeout(room.nightTimer);
-    room.nightTimer = undefined;
-    console.log('Night timer cancelled - fortune teller acted');
-  }
-
   // 占い結果を占い師に通知（ダミーを除く）
   if (!isDummyPlayer(fortuneTellerId)) {
     // 実プレイヤーの場合
@@ -74,7 +154,7 @@ export async function handleDivine(
         messages: [
           {
             type: 'text',
-            text: `占いの結果が出ました。\n\n${targetName} さんを占った結果……\n\n【${isWerewolf ? '人狼である' : '人狼ではない'}】 ことがわかりました。`,
+            text: `占いの結果が出ました。\n\n${targetName} さんを占った結果……\n\n【${isWerewolf ? '人狼である' : '人狼ではない'}】 ことがわかりました。\n\nまもなく朝フェーズが始まります。`,
           },
         ],
       });
@@ -85,7 +165,7 @@ export async function handleDivine(
         messages: [
           {
             type: 'text',
-            text: `占いの結果が出ました。\n\n${targetName} さんを占った結果……\n\n【${isWerewolf ? '人狼である' : '人狼ではない'}】 ことがわかりました。`,
+            text: `占いの結果が出ました。\n\n${targetName} さんを占った結果……\n\n【${isWerewolf ? '人狼である' : '人狼ではない'}】 ことがわかりました。\n\nまもなく朝フェーズが始まります。`,
           },
         ],
       });
@@ -94,10 +174,8 @@ export async function handleDivine(
     console.log('Dummy fortune teller divine - skipping message');
   }
 
-  // 朝フェーズへ移行（少し待ってから）
-  setTimeout(() => {
-    startDayPhase(roomId, roomKey || fortuneTellerId);
-  }, isDummyPlayer(fortuneTellerId) ? 1000 : 5000); // ダミーは1秒、実プレイヤーは5秒待つ
+  // 夜フェーズは30秒固定で終了（phaseHandlers.tsのタイマーに任せる）
+  console.log('Fortune teller acted - waiting for night phase timer (30s fixed)');
 }
 
 /**
@@ -159,21 +237,30 @@ export async function handleVote(
         where: { roomId: roomId },
       });
 
-      // roomKeyを特定（投票は個別DMで送られてくるため、voterIdをフォールバックとして使用）
-      roomKey = voterId;
+      if (players.length === 0) {
+        console.log('No players found for room:', roomId);
+        return;
+      }
+
+      // GMを特定（最初のプレイヤー、またはダミーでない最初のプレイヤー）
+      const gmPlayer = players.find(p => !isDummyPlayer(p.lineUserId)) || players[0];
+      const gmUserId = gmPlayer.lineUserId;
 
       // メモリに復元
       const participants = new Set(players.map(p => p.lineUserId));
       room = {
         roomId: dbRoom.id,
-        gmUserId: players[0]?.lineUserId || voterId,
+        gmUserId: gmUserId,
         participants: participants,
         status: 'voting',
         votes: new Map(),
       };
-      if (roomKey) {
-        activeRooms.set(roomKey, room);
-      }
+      
+      // activeRoomsに追加（roomIdをキーとして使用）
+      // 投票は個別DMから来るため、groupIdが不明
+      // roomIdをキーとして保存することで、後でgroupIdからもアクセス可能にする
+      roomKey = roomId;
+      activeRooms.set(roomKey, room);
 
       // roleAssignmentsも復元
       const roleMap = new Map<string, Role>();
@@ -186,6 +273,8 @@ export async function handleVote(
 
       console.log('Room restored from DB:', {
         roomId,
+        roomKey,
+        gmUserId,
         participants: participants.size,
         roles: roleMap.size,
       });
@@ -255,9 +344,9 @@ export async function handleVote(
     console.log('All players voted, showing results');
     // 全員投票完了！結果発表
     setTimeout(() => {
-      // グループIDがあればそれを使う、なければroomKeyを使う
-      const sendTo = room!.groupId || roomKey || voterId;
-      console.log('Sending results to:', sendTo, '(groupId:', room!.groupId, 'roomKey:', roomKey, ')');
+      // GMのIDに送信（グループがなければGMに個別メッセージ）
+      const sendTo = roomKey || voterId;
+      console.log('Sending results to:', sendTo, '(roomKey:', roomKey, ')');
       showVoteResults(roomId, sendTo);
     }, 1000);
   }

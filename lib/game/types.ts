@@ -34,4 +34,6 @@ export interface RoomData {
   nightTimer?: NodeJS.Timeout;       // 夜フェーズのタイマー
   discussionTimers?: NodeJS.Timeout[]; // 議論フェーズのタイマー配列
   discussionEndTime?: number;        // 議論終了予定時刻（Unix時間）
+  originalThiefId?: string;          // 元の怪盗のID（交換前）
+  originalFortuneTellerId?: string;  // 元の占い師のID（交換前）
 }

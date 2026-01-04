@@ -18,10 +18,11 @@ import {
 import { 
   handleRecruitmentEnd,
   handleDiscussionEnd,
-  handleExtendDiscussion 
+  handleExtendDiscussion,
+  handleShowRemainingTime
 } from '@/lib/game/controlHandlers';
 import { handleAutoAssign } from '@/lib/game/assignmentHandlers';
-import { handleDivine, handleVote } from '@/lib/game/actionHandlers';
+import { handleDivine, handleVote, handleThiefSwap } from '@/lib/game/actionHandlers';
 
 /**
  * メインイベントハンドラー
@@ -75,6 +76,12 @@ async function handleEvent(event: WebhookEvent): Promise<void> {
     // 延長コマンド
     if (text === '延長' || text === '時間延長') {
       await handleExtendDiscussion(event);
+      return;
+    }
+
+    // 残り時間コマンド
+    if (text === '残り時間' || text === '時間' || text === '残り') {
+      await handleShowRemainingTime(event);
       return;
     }
 
@@ -172,6 +179,15 @@ async function handlePostback(event: any): Promise<void> {
   // ランダム配分
   if (action === 'auto_assign' && roomId) {
     await handleAutoAssign(event, roomId);
+    return;
+  }
+
+  // 怪盗の交換処理
+  if (action === 'thief_swap' && roomId) {
+    const target = data.get('target');
+    if (target) {
+      await handleThiefSwap(event, roomId, userId, target);
+    }
     return;
   }
 
